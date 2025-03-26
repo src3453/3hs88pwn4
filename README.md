@@ -1,5 +1,5 @@
 # 3HS88PWN4
-A core sound engine source code of 3HS88PWN4, a fantasy sound chip that written in C++
+A core sound engine source code of 3HS88PWN4, a fantasy sound chip that written in C++. Also called S3HS for short, 3SGUC2 for internal Sound Generation Unit.
 
 # 3HS88PWN4 Specifications:
 - 8-Channel 8-Operator Harmonic Synthesizer
