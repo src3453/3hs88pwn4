@@ -1,13 +1,12 @@
 #include <math.h>
 #include <random>
 #include <iostream>
-#define Byte unsigned char
 #define M_PI 3.14159265358979323846
 #include "lib/effecter.cpp"
+#define Byte unsigned char
 
 class S3HS_sound {
 public:
-    
     #include "envelove.cpp"
     #include "ram.cpp"
     #ifndef MIN
@@ -39,6 +38,10 @@ public:
     float feedback = 0;
     int vols[64] = {};
     double previous[12] = {0.0};
+    #define DMA_BUFFER_SIZE 4096
+    unsigned char DMABuffer[4][DMA_BUFFER_SIZE] = {{0}};
+    int DMABufferPointer[4] = {0};
+    int DMA_DAC_Current[4] = {0};
     std::vector<int> gateTick = {0,0,0,0,0,0,0,0};
     std::vector<Byte> reg;
     std::vector<Byte> regenvl;
@@ -56,16 +59,39 @@ public:
     S3HS_sound() {
     };
     
-    #define S3HS_SAMPLE_FREQ 48000
+    float S3HS_SAMPLE_FREQ = 48000;
     #define SINTABLE_LENGTH 256
     #define PHASE_RESOLUTION 16
+
+    void setSampleRate(float sr) {
+        S3HS_SAMPLE_FREQ = sr;
+    }
 
     double sind(double theta) {
         return sin((double)theta*2*M_PI);
     }
 
     double modulate(double theta, int wf) {
-        return sintable[wf][(int)(((theta/S3HS_SAMPLE_FREQ)*256))&0xff];
+        const double scale = 256.0 / S3HS_SAMPLE_FREQ;
+        const double scaledTheta = theta * scale;
+        
+        // Calculate indices with bitwise operations for efficiency
+        const int index = ((int)scaledTheta) & 0xff;
+        const int nextIndex = (index + 1) & 0xff;
+        
+        // Get sample values
+        const double pre = sintable[wf][index];
+        const double nxt = sintable[wf][nextIndex];
+        
+        // Quick return conditions
+        if (pre == nxt || std::abs(nxt - pre) > 127)
+            return pre;
+        
+        // Calculate fractional part directly (avoid modf call)
+        const double fracPart = scaledTheta - (int)scaledTheta;
+        
+        // Linear interpolation
+        return pre + (nxt - pre) * fracPart;
     }
 
     double generateFMWave(double t1, double v1, double t2, double v2, double t3, double v3, double t4, double v4, int w1, int w2, int w3, int w4) {
@@ -215,7 +241,7 @@ public:
         return quantizedFreq;
     }
 
-    #define OVERSAMPLE_MULT 2
+    #define OVERSAMPLE_MULT 1
 
     std::vector<std::vector<std::vector<int16_t>>> AudioCallBack(int len)
     {
@@ -232,7 +258,7 @@ public:
         regwt = ram_peek2array(ram,0x400200,192);
         regother = ram_peek2array(ram,0x4002C0,0x240);
 
-        for (int wf=10; wf<14; wf++) {
+        /*for (int wf=10; wf<14; wf++) {
             for (int i=0; i<256; i++) {
                 int val = regwt.at(16+48*(wf-10)+((int)(i/8)%32));
                 if ((int)((i/8)*2)%2 == 0) {
@@ -244,41 +270,16 @@ public:
                 val -= 128;
                 sintable.at(wf).at(i) = (signed char)(val);
             }
-        }
-        /*for (int wf=14; wf<16; wf++) {
+        }*/
+        for (int wf=10; wf<14; wf++) {
             for (int i=0; i<256; i++) {
-                float pre = (float)regwt.at(16+48*(wf-14)+((int)(i/8)%32));
-                if ((int)((i/8)*2)%2 == 0) {
-                        pre /= 16;
-                    } else {
-                        pre=fmod(pre,16);
-                    }
-                int desirednxt = 0;
-                for (int j=1; j<64; j++) {
-                    float procnxt = (float)regwt.at(16+48*(wf-14)+((int)((i/8)+j/2)%32));
-                    if ((int)((i/8)*2+j)%2 == 0) {
-                        procnxt /= 16;
-                    } else {
-                        procnxt=fmod(procnxt,16);
-                    }
-                    if (procnxt-pre != 0) {
-                        desirednxt = j;
-                        break;
-                    }
-                }
-                float nxt = (float)regwt.at(16+48*(wf-14)+((int)(((float)i/8)+1)%32));
-                if ((int)((i/8)*2+1)%2 == 0) {
-                        nxt /= 16;
-                    } else {
-                        nxt=fmod(nxt,16);
-                    }
+                float pre = (float)regwt.at(16+48*(wf-10)+((int)(i/8)%32));
+                float nxt = (float)regwt.at(16+48*(wf-10)+((int)(((float)i/8)+1)%32));
                 int val = (int)(pre+(nxt-pre)*fmod((((float)i)/8),1));
-
-                val *= 16;
                 val -= 128;
                 sintable.at(wf).at(i) = (signed char)(val);
             }
-        }*/
+        }
         for (i = 0; i < framesize * OVERSAMPLE_MULT; i++) {
             double result[12] = {0};
             for(int ch=0; ch < 8; ch++) {
@@ -349,26 +350,44 @@ public:
                 //std::cout << pcm_addr[ch] << std::endl;
                 //std::cout << pcm_addr_end[ch] << std::endl;
                 //std::cout << pcm_loop_start[ch] << std::endl;
-                if (regwt[ch*48+3] == 1) {
+
+                #define fmod(val) ((val) - ((int)(val)))
+
+                if (regwt[ch*48+3] == 4) {
                     val = regwt[16+48*ch+((int)phase%32)];
-                    if ((int)(phase*2)%2 == 0) {
-                        val /= 16;
-                    } else {
-                        val %= 16;
-                    }
-                    val *= 16;
                 } else if(regwt[ch*48+3] == 2) {
                     val = noise[((int)phase%65536)]*255;
                 } else if(regwt[ch*48+3] == 3) {
                     val = noise[((int)phase%64)]*255;
-                } else if(regwt[ch*48+3] == 0) {
-                    if (pcm_addr[ch]+(int)phase > pcm_addr_end[ch] && pcm_loop_start[ch] < pcm_addr_end[ch] && pcm_loop_start[ch] != 0xFFFFFF) {
-                        val = ram_peek(ram,pcm_addr[ch]+((int)phase%(pcm_addr_end[ch]-pcm_loop_start[ch])));
+                } else if(regwt[ch*48+3] == 5) {
+                    if (DMABufferPointer[ch] > 0) {
+                        DMA_DAC_Current[ch] = (int)(DMABuffer[ch][0]);
+                        val = DMA_DAC_Current[ch];
+                        memmove(DMABuffer[ch], &DMABuffer[ch][1], DMA_BUFFER_SIZE-1);  //pop first value
+                        DMABufferPointer[ch]--;
                     } else {
-                        val = ram_peek(ram,std::min(pcm_addr[ch]+(int)phase,pcm_addr_end[ch]));
+                        val = DMA_DAC_Current[ch]; // Return previous value if buffer is empty
                     }
+
+                } else if(regwt[ch*48+3] == 1) {
+                    float pre = (float)regwt[16+48*ch+((int)phase%32)];
+                    float nxt = (float)regwt[16+48*ch+((int)(phase+1)%32)];
+                    val = (int)(pre+(nxt-pre)*fmod((((float)phase))));
+                } else if(regwt[ch*48+3] == 0) {
+                    int pre,nxt;
+                    if (pcm_addr[ch]+(int)phase > pcm_addr_end[ch] && pcm_loop_start[ch] < pcm_addr_end[ch] && pcm_loop_start[ch] != 0xFFFFFF) {
+                        pre = ram_peek(ram,pcm_addr[ch]+((int)phase%(pcm_addr_end[ch]-pcm_loop_start[ch])));
+                        nxt = ram_peek(ram,pcm_addr[ch]+((int)(phase+1)%(pcm_addr_end[ch]-pcm_loop_start[ch])));
+                    } else {
+                        pre = ram_peek(ram,std::min(pcm_addr[ch]+(int)phase,pcm_addr_end[ch]));
+                        nxt = ram_peek(ram,std::min(pcm_addr[ch]+(int)phase+1,pcm_addr_end[ch]));
+                    }
+                    val = (int)(pre+((float)(nxt-pre)*fmod((((float)phase)))));
                     //std::cout << phase << std::endl;
                 }
+
+                #undef fmod
+                
                 val -= 128;
                 double omega, alpha, a0, a1, a2, b0, b1, b2;
                 switch (regwt[ch*48+4])
@@ -462,19 +481,9 @@ public:
         }
         procL = outL;
         procR = outR;
-        //printf("Register %x %x\n",regother[0x000],regother[0x001]);
-        //if(regother[0x000] == 1) {
-            //float threshold = (float)(regother[0x002])/255;
-            //float ratio = 1+(float)(regother[0x003])/8; 
-        float volume = 1.0f+(float)(regother[0x004])/64;
-            //std::vector<std::vector<float>> out = effecter.Compressor(procL,procR,framesize,threshold,ratio,volume);
-            //procL = out[0];
-            //procR = out[1];
-            //printf("Compressor %f %f %f\n",threshold,ratio,volume);
-        //} else {
-            //procL = outL;
-            //procR = outR;
-        //}
+
+        // Master -> EQ -> Compressor -> Final Output
+
         if(regother[0x001] == 1) {
             float lowgain = (float)(regother[0x005])/8;
             float midgain = (float)(regother[0x006])/8;
@@ -487,11 +496,25 @@ public:
             //procL = outL;
             //procR = outR;
         }
+        //printf("Register %x %x\n",regother[0x000],regother[0x001]);
+        if(regother[0x000] == 1) {
+            float threshold = (float)(regother[0x002])/255;
+            float ratio = (float)(regother[0x003])/255; 
+            float volume = (float)(regother[0x004])/32;
+            std::vector<std::vector<float>> out = effecter.Compressor(procL,procR,framesize,threshold,ratio,volume);
+            procL = out[0];
+            procR = out[1];
+            //printf("Compressor %f %f %f\n",threshold,ratio,volume);
+        } else {
+            //procL = outL;
+            //procR = outR;
+        }
+       
         outL = procL;
         outR = procR;
         for (int i=0;i<framesize*OVERSAMPLE_MULT;i++) {
-            double tmpL = outL[i/OVERSAMPLE_MULT]*32767.0/8;
-            double tmpR = outR[i/OVERSAMPLE_MULT]*32767.0/8;
+            double tmpL = outL[i/OVERSAMPLE_MULT]*32767.0/4;
+            double tmpR = outR[i/OVERSAMPLE_MULT]*32767.0/4;
             if (tmpL < -32768.0) tmpL = -32768.0;
             if (tmpL > 32767.0) tmpL = 32767.0;
             if (tmpR < -32768.0) tmpR = -32768.0;
@@ -505,10 +528,6 @@ public:
         Total_time++;
         return frames;
     }
-
-    //void effectorInit() {
-    //    effecter.setSlewRate(regother[0x008]*4+1,regother[0x009]*4+1);
-    //}
 
     void initSound() {
         mt.seed(0);
@@ -526,10 +545,10 @@ public:
             
             sintable.at(1).at(i) = (signed char)(std::max(0.0,sind((double)i/256))*127);
             double qi = (double)((int)((double)i/(256/SINTABLE_LENGTH))*256/SINTABLE_LENGTH);
-            sintable.at(4).at(i) = (signed char)((i<128?(double)qi/64-1.0:(double)qi/-64+3.0)*127);
-            sintable.at(5).at(i) = (signed char)(((double)qi/128-1.0)*127);
-            sintable.at(7).at(i) = (signed char)(MAX(i<128?(double)qi/64-1.0:(double)qi/-64+3.0,0.0)*127);
-            sintable.at(8).at(i) = (signed char)(MAX((double)qi/128-1.0,0.0)*127);
+            sintable.at(4).at((i+64)%256) = (signed char)((i<128?(double)qi/64-1.0:(double)qi/-64+3.0)*127);
+            sintable.at(5).at((i+128)%256) = (signed char)(((double)qi/128-1.0)*127);
+            sintable.at(7).at((i+64)%256) = (signed char)(MAX(i<128?(double)qi/64-1.0:(double)qi/-64+3.0,0.0)*127);
+            sintable.at(8).at((i+128)%256) = (signed char)(MAX((double)qi/128-1.0,0.0)*127);
             //sintable.at(9).at(i) = (double)(mt()%2*2-1);
             sintable.at(9).at(i) = (signed char)((mt()&1)*255-128);
             if (i<128) {
@@ -565,6 +584,52 @@ public:
 
     void wtSync(int ch) {
         twt[ch]=0;
+    }
+
+    int putDMABuffer(int ch, unsigned char* data, size_t dataSize) 
+    {
+        // Error check for valid channel
+        if (ch < 0 || ch > 3) {
+            return -1; // Invalid channel number
+        }
+        
+        if (data == nullptr) {
+            return -3; // Invalid data pointer
+        }
+        
+        // Calculate data size by finding the length until null terminator or max buffer
+        //printf("Data size: %d\n", dataSize);
+        
+        if (dataSize == 0) {
+            return DMABufferPointer[ch]; // No data to copy
+        }
+        
+        // Check for buffer overflow
+        if (DMABufferPointer[ch] + dataSize > DMA_BUFFER_SIZE) {
+            // Provide detailed error message
+            printf("Channel %d: DMA Buffer overflow! Current: %d, Adding: %d, Max: %d\n", 
+                   ch, DMABufferPointer[ch], dataSize, DMA_BUFFER_SIZE);
+            
+            // Copy as much data as possible
+            int copyAmount = DMA_BUFFER_SIZE - DMABufferPointer[ch];
+            if (copyAmount > 0) {
+                memcpy(&DMABuffer[ch][DMABufferPointer[ch]], data, copyAmount);
+                DMABufferPointer[ch] = DMA_BUFFER_SIZE;
+            }
+            return -2; // Buffer overflow
+        }
+        
+        // Safely copy the data
+        memcpy(&DMABuffer[ch][DMABufferPointer[ch]], data, dataSize);
+        DMABufferPointer[ch] += dataSize;
+        return DMABufferPointer[ch]; // Return buffer length
+    }
+
+    int getDMABufferLength(int ch) {
+        if (ch < 0 || ch > 3) {
+            return -1; // Invalid channel number
+        }
+        return DMABufferPointer[ch]; // Return current buffer length
     }
     
 };
