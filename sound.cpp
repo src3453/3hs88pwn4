@@ -67,10 +67,6 @@ public:
         S3HS_SAMPLE_FREQ = sr;
     }
 
-    void setSampleRate(float sr) {
-        S3HS_SAMPLE_FREQ = sr;
-    }
-
     float sind(float theta) {
         return sin((float)theta*2*M_PI);
     }
