@@ -30,7 +30,21 @@ public:
     {
       currentValue -= std::min(-delta, slewRateLower/48000);
     }
+    if (currentValue < 0.0f)
+    {
+      currentValue = 0.0f;
+    }
+    else if (currentValue > 256.0f)
+    {
+      currentValue = 256.0f;
+    }
     return currentValue;
+  }
+
+  void changeSlewRate(float upper, float lower)
+  {
+    slewRateUpper = upper;
+    slewRateLower = lower;
   }
 };
 
@@ -46,8 +60,8 @@ public:
   CMyFilter envfilterL, envfilterR;   // 音圧を検知するために使うローパスフィルタ
   SlewLimitedEnvelope gainfilterL; // 急激な音量変化を避けるためのローパスフィルタ
   SlewLimitedEnvelope gainfilterR; // 急激な音量変化を避けるためのローパスフィルタ
-  float slewRateUpper = 500.0f; // スルーレート（変化率）
-  float slewRateLower = 20.0f; // スルーレート（変化率）
+  float slewRateUpper = 0.0f; // スルーレート（変化率）
+  float slewRateLower = 192000.0f; // スルーレート（変化率）
 
   S3HS_Effecter() : gainfilterL(slewRateUpper, slewRateLower), gainfilterR(slewRateUpper, slewRateLower) {}
 
@@ -91,7 +105,6 @@ public:
     return out;
   }
 
-  // Unused
   inline std::vector<std::vector<float>> Compressor(std::vector<float> inL, std::vector<float> inR, int length, float threshold, float ratio, float volume)
   {
     std::vector<float> _out(length, 0);
@@ -110,11 +123,16 @@ public:
     // ローパスフィルターを設定
 
     // カットオフ周波数が高いほど音圧変化に敏感になる。目安は10～50Hz程度
-    envfilterL.LowPass(30.0f, 1.0, 48000.0f);
-    envfilterR.LowPass(30.0f, 1.0, 48000.0f);
+    envfilterL.LowPass(50.0f, 1.0, 48000.0f);
+    envfilterR.LowPass(50.0f, 1.0, 48000.0f);
+
     // カットオフ周波数が高いほど急激な音量変化になる。目安は5～50Hz程度
     //gainfilterL.LowPass(5.0f, 1.0, 48000.0f);
     //gainfilterR.LowPass(5.0f, 1.0, 48000.0f);
+    slewRateUpper = ratio * 48000.0f; // スルーレート（変化率）
+    gainfilterL.changeSlewRate(slewRateUpper, slewRateLower);
+    gainfilterR.changeSlewRate(slewRateUpper, slewRateLower);
+    //printf("Slew rate: %f\n", slewRateLower);
 
     // 入力信号にエフェクトをかける
     for (int i = 0; i < length; i++)
@@ -125,12 +143,12 @@ public:
 
       // 音圧をもとに音量(ゲイン)を調整(左)
       float gainL = 1.0f;
-
-      if (tmpL > threshold)
+      gainL = threshold / tmpL;
+      /*if (tmpL > threshold)
       {
         // スレッショルドを超えたので音量(ゲイン)を調節(圧縮)
         gainL = threshold + (tmpL - threshold) / ratio;
-      }
+      }*/
       // 音量(ゲイン)が急激に変化しないようローパスフィルタを通す
       gainL = gainfilterL.process(gainL);
       //if (!isfinite(gainL))
@@ -140,10 +158,11 @@ public:
 
       // 左と同様に右も音圧をもとに音量(ゲイン)を調整
       float gainR = 1.0f;
-      if (tmpR > threshold)
+      gainR = threshold / tmpR;
+      /*if (tmpR > threshold)
       {
         gainR = threshold + (tmpR - threshold) / ratio;
-      }
+      }*/
       gainR = gainfilterR.process(gainR);
       //if (!isfinite(gainR))
       //{
@@ -157,12 +176,12 @@ public:
     return out;
   }
 
-  inline void setSlewRate(float upper, float lower)
+  /*inline void setSlewRate(float upper, float lower)
   {
     slewRateUpper = upper;
     slewRateLower = lower;
     gainfilterL = SlewLimitedEnvelope(slewRateUpper, slewRateLower);
     gainfilterR = SlewLimitedEnvelope(slewRateUpper, slewRateLower);
-  }
+  }*/
 };
 #endif

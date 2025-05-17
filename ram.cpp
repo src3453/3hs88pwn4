@@ -6,9 +6,7 @@
 std::vector<Byte> ram;
 
 // RAMおよびVRAMを管理する関数
-/*void ram_boot(std::vector<Byte>& ram, std::vector<Byte>& vram) {
-    ram.resize(S3HS_RAM_SIZE, Byte(0));
-}
+/*
 
 Byte vram_peek(std::vector<Byte>& vram, int addr) {
     if (addr < 0) {
@@ -45,6 +43,10 @@ void vram_pokefill(std::vector<Byte>& vram, int addr, int block, Byte val) {
 void vram_poke2array(std::vector<Byte>& vram, int addr, std::vector<Byte>& vals) {
     std::copy(vals.begin(), vals.end(), vram.begin() + addr);
 } */
+
+void ram_boot(std::vector<Byte>& ram) {
+    ram.resize(S3HS_RAM_SIZE, Byte(0));
+}
 
 Byte ram_peek(std::vector<Byte>& ram, int addr) {
     if (addr < 0) {
